@@ -219,6 +219,9 @@ struct pa_stream {
     void *event_userdata;
     pa_stream_notify_cb_t buffer_attr_callback;
     void *buffer_attr_userdata;
+
+    /* Shm ID key for synchronous callbacks */
+    uint32_t *shm_key_id;
 };
 
 typedef void (*pa_operation_cb_t)(void);

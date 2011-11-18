@@ -95,6 +95,7 @@ static int set_format(snd_pcm_t *pcm_handle, snd_pcm_hw_params_t *hwparams, pa_s
     pa_assert(hwparams);
     pa_assert(f);
 
+    pa_log_error("set format 1 to %u\n", format_trans[*f]);
     if ((ret = snd_pcm_hw_params_set_format(pcm_handle, hwparams, format_trans[*f])) >= 0)
         return ret;
 
@@ -125,6 +126,7 @@ static int set_format(snd_pcm_t *pcm_handle, snd_pcm_hw_params_t *hwparams, pa_s
     else
         goto try_auto;
 
+    pa_log_error("set format to %u\n", format_trans[*f]);
     if ((ret = snd_pcm_hw_params_set_format(pcm_handle, hwparams, format_trans[*f])) >= 0)
         return ret;
 
@@ -140,6 +142,7 @@ try_auto:
         if ((ret = snd_pcm_hw_params_set_format(pcm_handle, hwparams, format_trans[*f])) >= 0)
             return ret;
 
+	pa_log_error("set format auto to %u\n", format_trans[*f]);
         pa_log_debug("snd_pcm_hw_params_set_format(%s) failed: %s",
                      snd_pcm_format_description(format_trans[*f]),
                      pa_alsa_strerror(ret));
@@ -292,14 +295,19 @@ int pa_alsa_set_hw_params(
 
         _ss.channels = c;
     }
+    pa_log_error("set channels to %u\n", _ss.channels);
 
     if (_use_tsched && tsched_size > 0) {
+	    pa_log_error("tsched_size > 0\n");
         _buffer_size = (snd_pcm_uframes_t) (((uint64_t) tsched_size * _ss.rate) / ss->rate);
         _period_size = _buffer_size;
     } else {
+	    pa_log_error("tsched_size <= 0\n");
         _period_size = (snd_pcm_uframes_t) (((uint64_t) _period_size * _ss.rate) / ss->rate);
         _buffer_size = (snd_pcm_uframes_t) (((uint64_t) _buffer_size * _ss.rate) / ss->rate);
     }
+
+    pa_log_error("buff, period %d %d\n", _buffer_size, _period_size);
 
     if (_buffer_size > 0 || _period_size > 0) {
         snd_pcm_uframes_t max_frames = 0;
@@ -307,7 +315,7 @@ int pa_alsa_set_hw_params(
         if ((ret = snd_pcm_hw_params_get_buffer_size_max(hwparams, &max_frames)) < 0)
             pa_log_warn("snd_pcm_hw_params_get_buffer_size_max() failed: %s", pa_alsa_strerror(ret));
         else
-            pa_log_debug("Maximum hw buffer size is %lu ms", (long unsigned) (max_frames * PA_MSEC_PER_SEC / _ss.rate));
+            pa_log_error("Maximum hw buffer size is %lu ms", (long unsigned) (max_frames * PA_MSEC_PER_SEC / _ss.rate));
 
         /* Some ALSA drivers really don't like if we set the buffer
          * size first and the number of periods second. (which would
@@ -321,7 +329,7 @@ int pa_alsa_set_hw_params(
             if (set_buffer_size(pcm_handle, hwparams_copy, _buffer_size) >= 0 &&
                 set_period_size(pcm_handle, hwparams_copy, _period_size) >= 0 &&
                 snd_pcm_hw_params(pcm_handle, hwparams_copy) >= 0) {
-                pa_log_debug("Set buffer size first (to %lu samples), period size second (to %lu samples).", (unsigned long) _buffer_size, (unsigned long) _period_size);
+                pa_log_error("Set buffer size first (to %lu samples), period size second (to %lu samples).", (unsigned long) _buffer_size, (unsigned long) _period_size);
                 goto success;
             }
 
@@ -329,7 +337,7 @@ int pa_alsa_set_hw_params(
             if (set_period_size(pcm_handle, hwparams_copy, _period_size) >= 0 &&
                 set_buffer_size(pcm_handle, hwparams_copy, _buffer_size) >= 0 &&
                 snd_pcm_hw_params(pcm_handle, hwparams_copy) >= 0) {
-                pa_log_debug("Set period size first (to %lu samples), buffer size second (to %lu samples).", (unsigned long) _period_size, (unsigned long) _buffer_size);
+                pa_log_error("Set period size first (to %lu samples), buffer size second (to %lu samples).", (unsigned long) _period_size, (unsigned long) _buffer_size);
                 goto success;
             }
         }
@@ -340,7 +348,7 @@ int pa_alsa_set_hw_params(
             /* Third try: set only buffer size */
             if (set_buffer_size(pcm_handle, hwparams_copy, _buffer_size) >= 0 &&
                 snd_pcm_hw_params(pcm_handle, hwparams_copy) >= 0) {
-                pa_log_debug("Set only buffer size (to %lu samples).", (unsigned long) _buffer_size);
+                pa_log_error("Set only buffer size (to %lu samples).", (unsigned long) _buffer_size);
                 goto success;
             }
         }
@@ -351,7 +359,7 @@ int pa_alsa_set_hw_params(
             /* Fourth try: set only period size */
             if (set_period_size(pcm_handle, hwparams_copy, _period_size) >= 0 &&
                 snd_pcm_hw_params(pcm_handle, hwparams_copy) >= 0) {
-                pa_log_debug("Set only period size (to %lu samples).", (unsigned long) _period_size);
+                pa_log_error("Set only period size (to %lu samples).", (unsigned long) _period_size);
                 goto success;
             }
         }
@@ -391,6 +399,7 @@ success:
         pa_log_info("snd_pcm_hw_params_get_{period|buffer}_size() failed: %s", pa_alsa_strerror(ret));
         goto finish;
     }
+    pa_log_error("actual buff, period %d %d\n", _buffer_size, _period_size);
 
 #if (SND_LIB_VERSION >= ((1<<16)|(0<<8)|24)) /* API additions in 1.0.24 */
     if (_use_tsched) {
@@ -459,6 +468,7 @@ int pa_alsa_set_sw_params(snd_pcm_t *pcm, snd_pcm_uframes_t avail_min, pa_bool_t
         return err;
     }
 
+    pa_log_error("boundary = %u\n", boundary);
     if ((err = snd_pcm_sw_params_set_stop_threshold(pcm, swparams, boundary)) < 0) {
         pa_log_warn("Unable to set stop threshold: %s\n", pa_alsa_strerror(err));
         return err;

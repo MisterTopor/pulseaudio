@@ -974,7 +974,7 @@ static int update_sw_params(struct userdata *u) {
         avail_min += pa_usec_to_bytes(sleep_usec, &u->sink->sample_spec) / u->frame_size;
     }
 
-    pa_log_debug("setting avail_min=%lu", (unsigned long) avail_min);
+    pa_log_error("setting avail_min=%lu", (unsigned long) avail_min);
 
     if ((err = pa_alsa_set_sw_params(u->pcm_handle, avail_min, !u->use_tsched)) < 0) {
         pa_log("Failed to set software parameters: %s", pa_alsa_strerror(err));

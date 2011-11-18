@@ -232,6 +232,7 @@ enum {
 };
 
 static int sink_input_pop_cb(pa_sink_input *i, size_t length, pa_memchunk *chunk);
+static int sink_input_pop_cb_sync(pa_sink_input *i, size_t length, pa_memchunk *chunk);
 static void sink_input_kill_cb(pa_sink_input *i);
 static void sink_input_suspend_cb(pa_sink_input *i, pa_bool_t suspend);
 static void sink_input_moving_cb(pa_sink_input *i, pa_sink *dest);
@@ -1167,7 +1168,11 @@ static playback_stream* playback_stream_new(
     s->seek_windex = -1;
 
     s->sink_input->parent.process_msg = sink_input_process_msg;
-    s->sink_input->pop = sink_input_pop_cb;
+    // if (use sync shm)
+    s->sink_input->pop = sink_input_pop_cb_sync;
+    // else
+    //s->sink_input->pop = sink_input_pop_cb;
+    //endif
     s->sink_input->process_rewind = sink_input_process_rewind_cb;
     s->sink_input->update_max_rewind = sink_input_update_max_rewind_cb;
     s->sink_input->update_max_request = sink_input_update_max_request_cb;
@@ -1386,7 +1391,7 @@ static void native_connection_send_memblock(pa_native_connection *c) {
 static void handle_seek(playback_stream *s, int64_t indexw) {
     playback_stream_assert_ref(s);
 
-/*     pa_log("handle_seek: %llu -- %i", (unsigned long long) s->sink_input->thread_info.underrun_for, pa_memblockq_is_readable(s->memblockq)); */
+     pa_log_error("handle_seek: %llu -- %i", (unsigned long long) s->sink_input->thread_info.underrun_for, pa_memblockq_is_readable(s->memblockq));
 
     if (s->sink_input->thread_info.underrun_for > 0) {
 
@@ -1418,7 +1423,7 @@ static void handle_seek(playback_stream *s, int64_t indexw) {
         }
     }
 
-    playback_stream_request_bytes(s);
+//    playback_stream_request_bytes(s);
 }
 
 static void flush_write_no_account(pa_memblockq *q) {
@@ -1440,6 +1445,7 @@ static int sink_input_process_msg(pa_msgobject *o, int code, void *userdata, int
         case SINK_INPUT_MESSAGE_POST_DATA: {
             int64_t windex = pa_memblockq_get_write_index(s->memblockq);
 
+		pa_log_error("SINK_INPUT_MESSAGE\n");
             if (code == SINK_INPUT_MESSAGE_SEEK) {
                 /* The client side is incapable of accounting correctly
                  * for seeks of a type != PA_SEEK_RELATIVE. We need to be
@@ -1568,6 +1574,47 @@ static int sink_input_process_msg(pa_msgobject *o, int code, void *userdata, int
     }
 
     return pa_sink_input_process_msg(o, code, userdata, offset, chunk);
+}
+
+/* Called from thread context */
+static int sink_input_pop_cb_sync(pa_sink_input *i, size_t nbytes, pa_memchunk *chunk) {
+    playback_stream *s;
+    int idx;
+    size_t tlength, num, minreq;
+    uint8_t *dst;
+    pa_memblock *newblock;
+
+    pa_sink_input_assert_ref(i);
+    s = PLAYBACK_STREAM(i->userdata);
+    playback_stream_assert_ref(s);
+    pa_assert(chunk);
+
+
+    /* This call will not fail with prebuf=0, hence we check for
+       underrun explicitly above */
+//    if (pa_memblockq_peek(s->memblockq, chunk) < 0)
+//        return -1;
+
+    tlength = pa_memblockq_get_tlength(s->memblockq);
+    minreq = pa_memblockq_get_minreq(s->memblockq);
+    num = PA_MIN(nbytes, tlength - minreq);
+    newblock = pa_memblock_new(s->connection->protocol->core->mempool, num);
+    chunk->length = num;
+    chunk->index = 0;
+    chunk->memblock = newblock;
+    dst = pa_memblock_acquire(chunk->memblock);
+    for (idx = 0; idx < chunk->length; idx++) {
+	    *dst++ = rand() % 256;
+    }
+// TODO get data from client, check underrun
+    pa_memblock_release(chunk->memblock);
+
+    if (i->thread_info.underrun_for > 0)
+        pa_asyncmsgq_post(pa_thread_mq_get()->outq, PA_MSGOBJECT(s), PLAYBACK_STREAM_MESSAGE_STARTED, NULL, 0, NULL, NULL);
+
+    pa_memblockq_drop(s->memblockq, chunk->length);
+
+    return 0;
 }
 
 /* Called from thread context */
@@ -2082,6 +2129,16 @@ static void command_create_playback_stream(pa_pdispatch *pd, uint32_t command, u
             }
             pa_idxset_put(formats, format, NULL);
         }
+    }
+
+    if (c->version >= 22) {
+
+	uint32_t shm_key;
+	if (pa_tagstruct_getu32(t, &shm_key) < 0) {
+            protocol_error(c);
+            goto finish;
+        }
+	pa_log_error("Got shm id %d\n", shm_key);
     }
 
     if (n_formats == 0) {

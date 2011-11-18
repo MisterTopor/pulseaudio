@@ -1363,6 +1363,9 @@ static int create_stream(
         pa_tagstruct_put_boolean(t, flags & (PA_STREAM_PASSTHROUGH));
     }
 
+    if (s->context->version >= 22 && s->direction == PA_STREAM_PLAYBACK) {
+         pa_tagstruct_putu32(t, 5446);
+    }
     pa_pstream_send_tagstruct(s->context->pstream, t);
     pa_pdispatch_register_reply(s->context->pdispatch, tag, DEFAULT_TIMEOUT, pa_create_stream_callback, s, NULL);
 
@@ -2183,6 +2186,19 @@ void pa_stream_set_buffer_attr_callback(pa_stream *s, pa_stream_notify_cb_t cb, 
 
     s->buffer_attr_callback = cb;
     s->buffer_attr_userdata = userdata;
+}
+
+void pa_stream_set_shm_key_id(pa_stream *s, uint32_t userdata) {
+    pa_assert(s);
+    pa_assert(PA_REFCNT_VALUE(s) >= 1);
+
+    if (pa_detect_fork())
+        return;
+
+    if (s->state == PA_STREAM_TERMINATED || s->state == PA_STREAM_FAILED)
+        return;
+
+    s->shm_key_id = userdata;
 }
 
 void pa_stream_simple_ack_callback(pa_pdispatch *pd, uint32_t command, uint32_t tag, pa_tagstruct *t, void *userdata) {
