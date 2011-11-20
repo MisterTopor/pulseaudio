@@ -65,6 +65,7 @@
 
 #define DEFAULT_TSCHED_BUFFER_USEC (2*PA_USEC_PER_SEC)             /* 2s    -- Overall buffer size */
 #define DEFAULT_TSCHED_WATERMARK_USEC (20*PA_USEC_PER_MSEC)        /* 20ms  -- Fill up when only this much is left in the buffer */
+#define DEFAULT_TSCHED_WATERMARK_LOW_LATENCY_USEC (2*PA_USEC_PER_MSEC) /* 2ms  -- Fill up when only this much is left in the buffer */
 
 #define TSCHED_WATERMARK_INC_STEP_USEC (10*PA_USEC_PER_MSEC)       /* 10ms  -- On underrun, increase watermark by this */
 #define TSCHED_WATERMARK_DEC_STEP_USEC (5*PA_USEC_PER_MSEC)        /* 5ms   -- When everything's great, decrease watermark by this */
@@ -76,7 +77,7 @@
  * will increase the watermark only if we hit a real underrun. */
 
 #define TSCHED_MIN_SLEEP_USEC (10*PA_USEC_PER_MSEC)                /* 10ms  -- Sleep at least 10ms on each iteration */
-#define TSCHED_MIN_WAKEUP_USEC (4*PA_USEC_PER_MSEC)                /* 4ms   -- Wakeup at least this long before the buffer runs empty*/
+#define TSCHED_MIN_WAKEUP_USEC (2*PA_USEC_PER_MSEC)                /* 2ms   -- Wakeup at least this long before the buffer runs empty*/
 
 #define SMOOTHER_WINDOW_USEC  (10*PA_USEC_PER_SEC)                 /* 10s   -- smoother windows size */
 #define SMOOTHER_ADJUST_USEC  (1*PA_USEC_PER_SEC)                  /* 1s    -- smoother adjust time */
@@ -663,13 +664,13 @@ static int mmap_write(struct userdata *u, pa_usec_t *sleep_usec, pa_bool_t polle
     }
 
     if (u->use_tsched) {
-        *sleep_usec = pa_bytes_to_usec(left_to_play, &u->sink->sample_spec);
-        process_usec = pa_bytes_to_usec(u->tsched_watermark, &u->sink->sample_spec);
-
-        if (*sleep_usec > process_usec)
-            *sleep_usec -= process_usec;
-        else
+        size_t n = pa_alsa_safe_avail(u->pcm_handle, u->hwbuf_size, &u->sink->sample_spec);
+        left_to_play = check_left_to_play(u, n * u->frame_size, on_timeout);
+	if (left_to_play > u->tsched_watermark)
+	    *sleep_usec = pa_bytes_to_usec(left_to_play - u->tsched_watermark, &u->sink->sample_spec);
+	else
             *sleep_usec = 0;
+	//pa_log_error("dg-- == %d %d = %d\n", left_to_play, u->tsched_watermark, *sleep_usec);
     } else
         *sleep_usec = 0;
 
@@ -959,6 +960,10 @@ static int update_sw_params(struct userdata *u) {
         }
 
         fix_min_sleep_wakeup(u);
+        if (latency < DEFAULT_TSCHED_WATERMARK_USEC)
+            u->tsched_watermark = (uint32_t) pa_usec_to_bytes(DEFAULT_TSCHED_WATERMARK_LOW_LATENCY_USEC, &u->sink->sample_spec);
+	else
+            u->tsched_watermark = (uint32_t) pa_usec_to_bytes(DEFAULT_TSCHED_WATERMARK_USEC, &u->sink->sample_spec);
         fix_tsched_watermark(u);
     }
 

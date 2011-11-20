@@ -960,29 +960,11 @@ static void fix_playback_buffer_attr(playback_stream *s) {
 
     } else if (s->adjust_latency) {
 
-        /* So, the user asked us to adjust the latency of the stream
-         * buffer according to the what the sink can provide. The
-         * tlength passed in shall be the overall latency. Roughly
-         * half the latency will be spent on the hw buffer, the other
-         * half of it in the async buffer queue we maintain for each
-         * client. In between we'll have a safety space of size
-         * 2*minreq. Why the 2*minreq? When the hw buffer is completely
-         * empty and needs to be filled, then our buffer must have
-         * enough data to fulfill this request immediately and thus
-         * have at least the same tlength as the size of the hw
-         * buffer. It additionally needs space for 2 times minreq
-         * because if the buffer ran empty and a partial fillup
-         * happens immediately on the next iteration we need to be
-         * able to fulfill it and give the application also minreq
-         * time to fill it up again for the next request Makes 2 times
-         * minreq in plus.. */
+        if (tlength_usec <= minreq_usec*2)
+		tlength_usec += minreq_usec*2;
+	sink_usec = tlength_usec;
 
-        if (tlength_usec > minreq_usec*2)
-            sink_usec = (tlength_usec - minreq_usec*2)/2;
-        else
-            sink_usec = 0;
-
-        pa_log_debug("Adjust latency mode enabled, configuring sink latency to half of overall latency.");
+        pa_log_debug("Adjust latency mode enabled, configuring sink latency to all of overall latency.");
 
     } else {
 
@@ -1007,37 +989,16 @@ static void fix_playback_buffer_attr(playback_stream *s) {
 
         minreq_usec = s->configured_sink_latency;
 
-    } else if (s->adjust_latency) {
-
-        /* Ok, we didn't necessarily get what we were asking for, so
-         * let's subtract from what we asked for for the remaining
-         * buffer space */
-
-        if (tlength_usec >= s->configured_sink_latency)
-            tlength_usec -= s->configured_sink_latency;
     }
 
     pa_log_debug("Requested latency=%0.2f ms, Received latency=%0.2f ms",
                  (double) sink_usec / PA_USEC_PER_MSEC,
                  (double) s->configured_sink_latency / PA_USEC_PER_MSEC);
 
-    /* FIXME: This is actually larger than necessary, since not all of
-     * the sink latency is actually rewritable. */
-    if (tlength_usec < s->configured_sink_latency + 2*minreq_usec)
-        tlength_usec = s->configured_sink_latency + 2*minreq_usec;
-
     if (pa_usec_to_bytes_round_up(orig_tlength_usec, &s->sink_input->sample_spec) !=
         pa_usec_to_bytes_round_up(tlength_usec, &s->sink_input->sample_spec))
         s->buffer_attr.tlength = (uint32_t) pa_usec_to_bytes_round_up(tlength_usec, &s->sink_input->sample_spec);
 
-    if (pa_usec_to_bytes(orig_minreq_usec, &s->sink_input->sample_spec) !=
-        pa_usec_to_bytes(minreq_usec, &s->sink_input->sample_spec))
-        s->buffer_attr.minreq = (uint32_t) pa_usec_to_bytes(minreq_usec, &s->sink_input->sample_spec);
-
-    if (s->buffer_attr.minreq <= 0) {
-        s->buffer_attr.minreq = (uint32_t) frame_size;
-        s->buffer_attr.tlength += (uint32_t) frame_size*2;
-    }
 
     if (s->buffer_attr.tlength <= s->buffer_attr.minreq)
         s->buffer_attr.tlength = s->buffer_attr.minreq*2 + (uint32_t) frame_size;
