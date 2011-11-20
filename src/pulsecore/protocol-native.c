@@ -140,6 +140,11 @@ typedef struct playback_stream {
     /* Fixed-up and adjusted buffer attributes */
     pa_buffer_attr buffer_attr;
 
+    int shmid;
+    uint8_t *shmarea;
+    size_t shmsize;
+    int sound_msg_fd;
+
     /* Only updated after SINK_INPUT_MESSAGE_UPDATE_LATENCY */
     int64_t read_index, write_index;
     size_t render_memblockq_length;
@@ -1022,6 +1027,7 @@ static void fix_playback_buffer_attr(playback_stream *s) {
 static playback_stream* playback_stream_new(
         pa_native_connection *c,
         pa_sink *sink,
+	int socket_idx,
         pa_sample_spec *ss,
         pa_channel_map *map,
         pa_idxset *formats,
@@ -1036,7 +1042,9 @@ static playback_stream* playback_stream_new(
         pa_bool_t relative_volume,
         uint32_t syncid,
         uint32_t *missing,
-        int *ret) {
+        int *ret,
+	int *shmid,
+	size_t *shm_size) {
 
     /* Note: This function takes ownership of the 'formats' param, so we need
      * to take extra care to not leak it */
@@ -1166,6 +1174,22 @@ static playback_stream* playback_stream_new(
 
     *missing = (uint32_t) pa_memblockq_pop_missing(s->memblockq);
 
+    *shm_size = (size_t) pa_usec_to_bytes(s->configured_sink_latency, &sink_input->sample_spec);
+    *shmid = 5446; // TODO(dgreid)
+    if ((shmid = shmget(*shmid, *shm_size, IPC_CREAT | 0666)) < 0) {
+	    pa_log_error("shmget");
+    }
+    s->shmarea = shmat(shmid, NULL, 0);
+    if (s->shmarea == (uint8_t *) -1) {
+	    pa_log_error("shmat");
+    }
+
+    askldfjklasdjfklasjkld;f
+    TODO(dgreid) - open up socket specifiec in stream and save in struct
+    pass back shm params
+    chage write to use socket and shm area.
+    implement other end
+
 #ifdef PROTOCOL_NATIVE_DEBUG
     pa_log("missing original: %li", (long int) *missing);
 #endif
@@ -1175,6 +1199,7 @@ static playback_stream* playback_stream_new(
 
     pa_idxset_put(c->output_streams, s, &s->index);
 
+    pa_log_error("dg-- final latency %u %u\n", s->buffer_attr.tlength, s->configured_sink_latency);
     pa_log_info("Final latency %0.2f ms = %0.2f ms + 2*%0.2f ms + %0.2f ms",
                 ((double) pa_bytes_to_usec(s->buffer_attr.tlength, &sink_input->sample_spec) + (double) s->configured_sink_latency) / PA_USEC_PER_MSEC,
                 (double) pa_bytes_to_usec(s->buffer_attr.tlength-s->buffer_attr.minreq*2, &sink_input->sample_spec) / PA_USEC_PER_MSEC,
@@ -1971,6 +1996,7 @@ static void command_create_playback_stream(pa_pdispatch *pd, uint32_t command, u
     pa_format_info *format;
     pa_idxset *formats = NULL;
     uint32_t i;
+    int socket_idx = -1;
 
     pa_native_connection_assert_ref(c);
     pa_assert(t);
@@ -2094,12 +2120,11 @@ static void command_create_playback_stream(pa_pdispatch *pd, uint32_t command, u
 
     if (c->version >= 22) {
 
-	uint32_t shm_key;
-	if (pa_tagstruct_getu32(t, &shm_key) < 0) {
+	if (pa_tagstruct_getu32(t, &socket_idx) < 0) {
             protocol_error(c);
             goto finish;
         }
-	pa_log_error("Got shm id %d\n", shm_key);
+	pa_log_error("Got socket idx %d\n", socket_idx);
     }
 
     if (n_formats == 0) {
@@ -2149,7 +2174,7 @@ static void command_create_playback_stream(pa_pdispatch *pd, uint32_t command, u
      * flag. For older versions we synthesize it here */
     muted_set = muted_set || muted;
 
-    s = playback_stream_new(c, sink, &ss, &map, formats, &attr, volume_set ? &volume : NULL, muted, muted_set, flags, p, adjust_latency, early_requests, relative_volume, syncid, &missing, &ret);
+    s = playback_stream_new(c, sink, socket_idx, &ss, &map, formats, &attr, volume_set ? &volume : NULL, muted, muted_set, flags, p, adjust_latency, early_requests, relative_volume, syncid, &missing, &ret, &shmid, &shm_size);
     /* We no longer own the formats idxset */
     formats = NULL;
 
