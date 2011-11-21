@@ -202,6 +202,7 @@ struct pa_stream {
     pa_stream_request_cb_t read_callback;
     void *read_userdata;
     pa_stream_request_cb_t write_callback;
+    pa_stream_request_cb_t sync_write_callback;
     void *write_userdata;
     pa_stream_notify_cb_t overflow_callback;
     void *overflow_userdata;
@@ -224,6 +225,7 @@ struct pa_stream {
     uint32_t shmkey;
     uint32_t shm_size;
     int socket_idx;
+    int socket_fd;
 };
 
 typedef void (*pa_operation_cb_t)(void);

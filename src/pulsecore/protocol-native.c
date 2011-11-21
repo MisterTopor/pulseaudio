@@ -1191,7 +1191,7 @@ static playback_stream* playback_stream_new(
         s->sound_msg_fd = socket(PF_UNIX, SOCK_STREAM, 0);
         if(s->sound_msg_fd < 0)
         {
-            printf("socket() failed\n");
+            pa_log_error("socket() failed\n");
             return 1;
         }
         memset(&address, 0, sizeof(struct sockaddr_un));
@@ -1205,9 +1205,6 @@ static playback_stream* playback_stream_new(
     } else {
         s->shmkey = -1;
     }
-
-    // TODO(dgreid)chage write to use socket and shm area.
-    // TODO(dgreid)implement other end
 
 #ifdef PROTOCOL_NATIVE_DEBUG
     pa_log("missing original: %li", (long int) *missing);
@@ -1584,8 +1581,7 @@ static int sink_input_process_msg(pa_msgobject *o, int code, void *userdata, int
 /* Called from thread context */
 static int sink_input_pop_cb_sync(pa_sink_input *i, size_t nbytes, pa_memchunk *chunk) {
     playback_stream *s;
-    int idx;
-    size_t tlength, num, minreq;
+    size_t tlength, num, minreq, nwritten;
     uint8_t *dst;
     pa_memblock *newblock;
 
@@ -1608,10 +1604,12 @@ static int sink_input_pop_cb_sync(pa_sink_input *i, size_t nbytes, pa_memchunk *
     chunk->index = 0;
     chunk->memblock = newblock;
     dst = pa_memblock_acquire(chunk->memblock);
-    for (idx = 0; idx < chunk->length; idx++) {
-	    *dst++ = rand() % 256;
-    }
-// TODO get data from client, check underrun
+    if (write(s->sound_msg_fd, &num, sizeof(num)) != sizeof(num))
+        pa_log_error("writing to sync socket");;
+    if (read(s->sound_msg_fd, &nwritten, sizeof(nwritten)) != sizeof(nwritten))
+        pa_log_error("reading from sync socket");;
+    memcpy(dst, s->shm_area, nwritten);
+// TODO(dgreid) check underrun
     pa_memblock_release(chunk->memblock);
 
     if (i->thread_info.underrun_for > 0)

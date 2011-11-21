@@ -236,6 +236,18 @@ static void stream_write_callback(pa_stream *s, size_t length, void *userdata) {
     }
 }
 
+/* This is called whenever new data may be written to the shm region */
+static void stream_sync_write_callback(pa_stream *s, size_t length, void *userdata) {
+//	TODO(dgreid) - read data, write to shm.
+    size_t idx;
+    uint8_t *dst;
+    pa_assert(userdata);
+    dst = (uint8_t *) userdata;
+    for (idx = 0; idx < length; idx++) {
+	    *dst++ = rand() % 256;
+    }
+}
+
 /* This is called whenever new data may is available */
 static void stream_read_callback(pa_stream *s, size_t length, void *userdata) {
 
@@ -443,6 +455,7 @@ static void context_state_callback(pa_context *c, void *userdata) {
 
         case PA_CONTEXT_READY: {
             pa_buffer_attr buffer_attr;
+            uint32_t socket_idx = 23;
 
             pa_assert(c);
             pa_assert(!stream);
@@ -456,7 +469,9 @@ static void context_state_callback(pa_context *c, void *userdata) {
             }
 
             pa_stream_set_state_callback(stream, stream_state_callback, NULL);
-            pa_stream_set_write_callback(stream, stream_write_callback, NULL);
+            //pa_stream_set_write_callback(stream, stream_write_callback, NULL);
+            pa_stream_set_sync_write_callback(stream, stream_sync_write_callback, NULL);
+            pa_stream_set_socket_idx(stream, NULL, &socket_idx);
             pa_stream_set_read_callback(stream, stream_read_callback, NULL);
             pa_stream_set_suspended_callback(stream, stream_suspended_callback, NULL);
             pa_stream_set_moved_callback(stream, stream_moved_callback, NULL);

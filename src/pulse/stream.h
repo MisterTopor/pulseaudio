@@ -563,6 +563,10 @@ void pa_stream_set_state_callback(pa_stream *s, pa_stream_notify_cb_t cb, void *
  * written to the stream. */
 void pa_stream_set_write_callback(pa_stream *p, pa_stream_request_cb_t cb, void *userdata);
 
+/** Set the callback function that is called when new data may be
+ * written to the shm stream synchronously. */
+void pa_stream_set_sync_write_callback(pa_stream *p, pa_stream_request_cb_t cb, void *userdata);
+
 /** Set the callback function that is called when new data is available from the stream.
  * Return the number of bytes read.*/
 void pa_stream_set_read_callback(pa_stream *p, pa_stream_request_cb_t cb, void *userdata);

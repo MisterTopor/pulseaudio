@@ -24,9 +24,13 @@
 #include <config.h>
 #endif
 
+#include <pthread.h>
 #include <string.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/shm.h>
+#include <sys/socket.h>
+#include <sys/un.h>
 
 #include <pulse/def.h>
 #include <pulse/timeval.h>
@@ -59,6 +63,7 @@ static void reset_callbacks(pa_stream *s) {
     s->read_callback = NULL;
     s->read_userdata = NULL;
     s->write_callback = NULL;
+    s->sync_write_callback = NULL;
     s->write_userdata = NULL;
     s->state_callback = NULL;
     s->state_userdata = NULL;
@@ -835,9 +840,11 @@ void pa_command_request(pa_pdispatch *pd, uint32_t command, uint32_t tag, pa_tag
 
     s->requested_bytes += bytes;
 
+    pa_assert(!s->sync_write_callback);
+
     /* pa_log("got request for %lli, now at %lli", (long long) bytes, (long long) s->requested_bytes); */
 
-    if (s->requested_bytes > 0 && s->write_callback)
+    if (s->requested_bytes > 0 && s->write_callback && !s->sync_write_callback)
         s->write_callback(s, (size_t) s->requested_bytes, s->write_userdata);
 
 finish:
@@ -948,6 +955,48 @@ static void auto_timing_update_callback(pa_mainloop_api *m, pa_time_event *e, co
     pa_stream_unref(s);
 }
 
+static void *run_sync_playback_stream(void *arg) {
+    pa_stream *s = (pa_stream *) arg;
+    uint8_t *shm_areas;
+    int shmid;
+    int connection_fd;
+
+    pa_assert(s);
+
+    pa_log_error("accept");
+    connection_fd = accept(s->socket_fd, NULL, NULL);
+
+    pa_log_error("shmget %u %u\n", s->shmkey, s->shm_size);
+    if ((shmid = shmget(s->shmkey, s->shm_size, 0666)) < 0) {
+        perror("shmget");
+        return NULL;
+    }
+    shm_areas = shmat(shmid, NULL, 0);
+    if (shm_areas == (uint8_t *) -1) {
+        perror("shmat");
+        return NULL;
+    }
+    pa_log_error("dg-- shm start %p\n", shm_areas);
+
+    while(1) {
+        size_t msg;
+        if (read(connection_fd, &msg, sizeof(msg)) != sizeof(msg))
+            continue;
+        s->sync_write_callback(s, msg, shm_areas);
+        if (write(connection_fd, &msg, sizeof(msg)) != sizeof(msg))
+            continue;
+    }
+
+    shmdt(shm_areas);
+    close(connection_fd);
+    close(s->socket_fd);
+}
+
+static void start_sync_playback_stream(pa_stream *s) {
+    pthread_t tid;
+    pthread_create(&tid, NULL, run_sync_playback_stream, s);
+}
+
 static void create_stream_complete(pa_stream *s) {
     pa_assert(s);
     pa_assert(PA_REFCNT_VALUE(s) >= 1);
@@ -955,7 +1004,9 @@ static void create_stream_complete(pa_stream *s) {
 
     pa_stream_set_state(s, PA_STREAM_READY);
 
-    if (s->requested_bytes > 0 && s->write_callback)
+    if (s->sync_write_callback)
+        start_sync_playback_stream(s);
+    else if (s->requested_bytes > 0 && s->write_callback)
         s->write_callback(s, (size_t) s->requested_bytes, s->write_userdata);
 
     if (s->flags & PA_STREAM_AUTO_TIMING_UPDATE) {
@@ -1131,9 +1182,9 @@ void pa_create_stream_callback(pa_pdispatch *pd, uint32_t command, uint32_t tag,
         }
     }
 
-    if (s->context->version >=23) {
-	    pa_tagstruct_getu32(t, &s->shmkey);
-	    pa_tagstruct_getu32(t, (uint32_t *) &s->shm_size);
+    if (s->context->version >= 23) {
+        pa_tagstruct_getu32(t, &s->shmkey);
+        pa_tagstruct_getu32(t, (uint32_t *) &s->shm_size);
     }
 
     if (!pa_tagstruct_eof(t)) {
@@ -2067,6 +2118,20 @@ void pa_stream_set_write_callback(pa_stream *s, pa_stream_request_cb_t cb, void 
     s->write_userdata = userdata;
 }
 
+void pa_stream_set_sync_write_callback(pa_stream *s, pa_stream_request_cb_t cb, void *userdata) {
+    pa_assert(s);
+    pa_assert(PA_REFCNT_VALUE(s) >= 1);
+
+    if (pa_detect_fork())
+        return;
+
+    if (s->state == PA_STREAM_TERMINATED || s->state == PA_STREAM_FAILED)
+        return;
+
+    s->sync_write_callback = cb;
+    s->write_userdata = userdata;
+}
+
 void pa_stream_set_state_callback(pa_stream *s, pa_stream_notify_cb_t cb, void *userdata) {
     pa_assert(s);
     pa_assert(PA_REFCNT_VALUE(s) >= 1);
@@ -2194,6 +2259,7 @@ void pa_stream_set_buffer_attr_callback(pa_stream *s, pa_stream_notify_cb_t cb, 
 }
 
 void pa_stream_set_socket_idx(pa_stream *s, pa_stream_notify_cb_t cb, void *userdata) {
+    struct sockaddr_un address;
     pa_assert(s);
     pa_assert(PA_REFCNT_VALUE(s) >= 1);
 
@@ -2204,6 +2270,30 @@ void pa_stream_set_socket_idx(pa_stream *s, pa_stream_notify_cb_t cb, void *user
         return;
 
     s->socket_idx = *(uint32_t*)userdata;
+
+    s->socket_fd = socket(PF_UNIX, SOCK_STREAM, 0);
+    if(s->socket_fd < 0)
+    {
+        pa_log_error("socket() failed\n");
+        return;
+    }
+    memset(&address, 0, sizeof(struct sockaddr_un));
+    address.sun_family = AF_UNIX;
+    snprintf(address.sun_path, 50, "/tmp/demo_socket-%d", s->socket_idx);
+    unlink(address.sun_path);
+
+    if(bind(s->socket_fd, (struct sockaddr *) &address,
+                sizeof(struct sockaddr_un)) != 0)
+    {
+        pa_log_error("bind() failed\n");
+        return;
+    }
+
+    if(listen(s->socket_fd, 5) != 0)
+    {
+        pa_log_error("listen() failed\n");
+        return;
+    }
 }
 
 void pa_stream_simple_ack_callback(pa_pdispatch *pd, uint32_t command, uint32_t tag, pa_tagstruct *t, void *userdata) {
