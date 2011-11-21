@@ -28,6 +28,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <sys/shm.h>
+#include <sys/socket.h>
+#include <sys/un.h>
 
 #include <pulse/rtclock.h>
 #include <pulse/timeval.h>
@@ -140,9 +143,9 @@ typedef struct playback_stream {
     /* Fixed-up and adjusted buffer attributes */
     pa_buffer_attr buffer_attr;
 
-    int shmid;
-    uint8_t *shmarea;
-    size_t shmsize;
+    int shmkey;
+    uint8_t *shm_area;
+    size_t shm_size;
     int sound_msg_fd;
 
     /* Only updated after SINK_INPUT_MESSAGE_UPDATE_LATENCY */
@@ -1042,9 +1045,7 @@ static playback_stream* playback_stream_new(
         pa_bool_t relative_volume,
         uint32_t syncid,
         uint32_t *missing,
-        int *ret,
-	int *shmid,
-	size_t *shm_size) {
+        int *ret) {
 
     /* Note: This function takes ownership of the 'formats' param, so we need
      * to take extra care to not leak it */
@@ -1057,6 +1058,8 @@ static playback_stream* playback_stream_new(
     int64_t start_index;
     pa_sink_input_new_data data;
     char *memblockq_name;
+    struct sockaddr_un address;
+    int shmid;
 
     pa_assert(c);
     pa_assert(ss);
@@ -1174,21 +1177,37 @@ static playback_stream* playback_stream_new(
 
     *missing = (uint32_t) pa_memblockq_pop_missing(s->memblockq);
 
-    *shm_size = (size_t) pa_usec_to_bytes(s->configured_sink_latency, &sink_input->sample_spec);
-    *shmid = 5446; // TODO(dgreid)
-    if ((shmid = shmget(*shmid, *shm_size, IPC_CREAT | 0666)) < 0) {
-	    pa_log_error("shmget");
-    }
-    s->shmarea = shmat(shmid, NULL, 0);
-    if (s->shmarea == (uint8_t *) -1) {
-	    pa_log_error("shmat");
+    if (socket_idx >= 0) {
+        s->shm_size = (size_t) pa_usec_to_bytes(s->configured_sink_latency, &sink_input->sample_spec);
+        s->shmkey = 5446; // TODO(dgreid)
+        if ((shmid = shmget(s->shmkey, s->shm_size, IPC_CREAT | 0666)) < 0) {
+            pa_log_error("shmget");
+        }
+        s->shm_area = shmat(shmid, NULL, 0);
+        if (s->shm_area == (uint8_t *) -1) {
+            pa_log_error("shmat");
+        }
+
+        s->sound_msg_fd = socket(PF_UNIX, SOCK_STREAM, 0);
+        if(s->sound_msg_fd < 0)
+        {
+            printf("socket() failed\n");
+            return 1;
+        }
+        memset(&address, 0, sizeof(struct sockaddr_un));
+        address.sun_family = AF_UNIX;
+        snprintf(address.sun_path, 50, "/tmp/demo_socket-%d", socket_idx);
+        if(connect(s->sound_msg_fd, (struct sockaddr *) &address,
+                    sizeof(struct sockaddr_un)) != 0)
+        {
+            pa_log_error("connect() failed\n");
+        }
+    } else {
+        s->shmkey = -1;
     }
 
-    askldfjklasdjfklasjkld;f
-    TODO(dgreid) - open up socket specifiec in stream and save in struct
-    pass back shm params
-    chage write to use socket and shm area.
-    implement other end
+    // TODO(dgreid)chage write to use socket and shm area.
+    // TODO(dgreid)implement other end
 
 #ifdef PROTOCOL_NATIVE_DEBUG
     pa_log("missing original: %li", (long int) *missing);
@@ -2120,11 +2139,11 @@ static void command_create_playback_stream(pa_pdispatch *pd, uint32_t command, u
 
     if (c->version >= 22) {
 
-	if (pa_tagstruct_getu32(t, &socket_idx) < 0) {
+	if (pa_tagstruct_getu32(t, (uint32_t *) &socket_idx) < 0) {
             protocol_error(c);
             goto finish;
         }
-	pa_log_error("Got socket idx %d\n", socket_idx);
+	pa_log_error("dg-- Got socket idx %d\n", socket_idx);
     }
 
     if (n_formats == 0) {
@@ -2174,7 +2193,7 @@ static void command_create_playback_stream(pa_pdispatch *pd, uint32_t command, u
      * flag. For older versions we synthesize it here */
     muted_set = muted_set || muted;
 
-    s = playback_stream_new(c, sink, socket_idx, &ss, &map, formats, &attr, volume_set ? &volume : NULL, muted, muted_set, flags, p, adjust_latency, early_requests, relative_volume, syncid, &missing, &ret, &shmid, &shm_size);
+    s = playback_stream_new(c, sink, socket_idx, &ss, &map, formats, &attr, volume_set ? &volume : NULL, muted, muted_set, flags, p, adjust_latency, early_requests, relative_volume, syncid, &missing, &ret);
     /* We no longer own the formats idxset */
     formats = NULL;
 
@@ -2225,6 +2244,13 @@ static void command_create_playback_stream(pa_pdispatch *pd, uint32_t command, u
             pa_tagstruct_put_format_info(reply, f);
             pa_format_info_free(f);
         }
+    }
+
+    if (c->version >= 23) {
+        /* Send back sync shm info */
+        pa_log_error("dg-- put in reply %d %d\n", s->shmkey, s->shm_size);
+        pa_tagstruct_putu32(reply, (uint32_t) s->shmkey);
+        pa_tagstruct_putu32(reply, (uint32_t) s->shm_size);
     }
 
     pa_pstream_send_tagstruct(c->pstream, reply);

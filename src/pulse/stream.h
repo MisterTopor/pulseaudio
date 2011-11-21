@@ -619,6 +619,10 @@ void pa_stream_set_event_callback(pa_stream *p, pa_stream_event_cb_t cb, void *u
  * pa_stream_set_moved_callback() as well. \since 0.9.15 */
 void pa_stream_set_buffer_attr_callback(pa_stream *p, pa_stream_notify_cb_t cb, void *userdata);
 
+/** Set the socket index to be used for synchronous audio callbacks
+ */
+void pa_stream_set_socket_idx(pa_stream *p, pa_stream_notify_cb_t cb, void *userdata);
+
 /** Pause (or resume) playback of this stream temporarily. Available
  * on both playback and recording streams. If b is 1 the stream is
  * paused. If b is 0 the stream is resumed. The pause/resume operation
