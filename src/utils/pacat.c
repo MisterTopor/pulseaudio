@@ -176,6 +176,31 @@ static void do_stream_write(size_t length) {
     }
 }
 
+static void do_stream_sync_write(size_t length, uint8_t *dest) {
+    size_t l;
+    pa_assert(length);
+
+    if (!buffer || !buffer_length)
+        return;
+
+    l = length;
+    if (l > buffer_length) {
+        pa_log_error("%d > %d\n", l, buffer_length);
+        l = buffer_length;
+    }
+
+    memcpy(dest, (uint8_t*) buffer + buffer_index, l);
+
+    buffer_length -= l;
+    buffer_index += l;
+
+    if (!buffer_length) {
+        pa_xfree(buffer);
+        buffer = NULL;
+        buffer_index = buffer_length = 0;
+    }
+}
+
 /* This is called whenever new data may be written to the stream */
 static void stream_write_callback(pa_stream *s, size_t length, void *userdata) {
     pa_assert(s);
@@ -238,13 +263,54 @@ static void stream_write_callback(pa_stream *s, size_t length, void *userdata) {
 
 /* This is called whenever new data may be written to the shm region */
 static void stream_sync_write_callback(pa_stream *s, size_t length, void *userdata) {
-//	TODO(dgreid) - read data, write to shm.
-    size_t idx;
+    sf_count_t bytes;
+    void *data;
     uint8_t *dst;
+
     pa_assert(userdata);
     dst = (uint8_t *) userdata;
-    for (idx = 0; idx < length; idx++) {
-	    *dst++ = rand() % 256;
+
+    if (raw) {
+        pa_assert(!sndfile);
+
+        if (stdio_event)
+            mainloop_api->io_enable(stdio_event, PA_IO_EVENT_INPUT);
+
+        if (!buffer)
+            return;
+
+        do_stream_sync_write(length, dst);
+    } else {
+        pa_assert(sndfile);
+
+        for (;;) {
+            size_t data_length = length;
+
+            if (readf_function) {
+                size_t k = pa_frame_size(&sample_spec);
+
+                if ((bytes = readf_function(sndfile, data, (sf_count_t) (data_length/k))) > 0)
+                    bytes *= (sf_count_t) k;
+
+            } else
+                bytes = sf_read_raw(sndfile, data, (sf_count_t) data_length);
+
+            if (bytes > 0)
+                do_stream_sync_write(bytes, dst);
+
+            /* EOF? */
+            if (bytes < (sf_count_t) data_length) {
+                start_drain();
+                break;
+            }
+
+            /* Request fulfilled */
+            if ((size_t) bytes >= length)
+                break;
+
+            length -= bytes;
+            dst += bytes;
+        }
     }
 }
 
