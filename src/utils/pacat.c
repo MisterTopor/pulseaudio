@@ -521,6 +521,7 @@ static void context_state_callback(pa_context *c, void *userdata) {
 
         case PA_CONTEXT_READY: {
             pa_buffer_attr buffer_attr;
+            //TODO(dgreid) either allocate this dynamically or pass the address.
             uint32_t socket_idx = 23;
 
             pa_assert(c);
@@ -618,6 +619,7 @@ static void stdin_callback(pa_mainloop_api*a, pa_io_event *e, int fd, pa_io_even
     if (!stream || pa_stream_get_state(stream) != PA_STREAM_READY || !(l = w = pa_stream_writable_size(stream)))
         l = 4096;
 
+    l = 4096*1024;
     buffer = pa_xmalloc(l);
 
     if ((r = read(fd, buffer, l)) <= 0) {
